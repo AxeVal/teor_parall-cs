@@ -1,115 +1,147 @@
+// подключение библиотек С++
 #include <iostream>
 #include <cstring>
 #include <sstream>
 #include <cmath>
-#include <chrono>
 
-double eps = 1E-6;
+#define at(arr, x, y) (arr[(x) * size + (y)]) 
+
+// инициализаци значений переменных по умолчанию
+// максимальное количество итераций
 int iter_max = 1E6;
-int size = 10;
+// минимальное значение ошибки
+double eps   = 1E-6;
+// размер стороны квадратной матрицы
+int size     = 128;
+bool mat     = false;
 
 
-void initArr(double** A)
+int main(int argc, char **argv)
 {
-	A[0][0] = 10;
-	A[0][size - 1] = 20;
-	A[size - 1][0] = 20;
-	A[size - 1][size - 1] = 30;
+    // ввод данных из консоли
+    for(int arg = 0; arg < argc; arg += 1)
+    { 
+        if(strcmp(argv[arg], "-error") == 0)
+        {   
+            // ошибка
+            eps = atof(argv[arg+1]);
+            arg += 1;
+        }
+        else if(strcmp(argv[arg], "-iter") == 0)
+        {
+            // итерации
+            iter_max = atoi(argv[arg+1]);
+            arg += 1;
+        }
+        else if(strcmp(argv[arg], "-size") == 0)
+        {
+            // размер
+            size = atoi(argv[arg+1]);
+            arg += 1;
+        }
+        else if(strcmp(argv[arg], "-mat") == 0)
+        {
+            // вывод (да/нет)
+            mat = true;
+            arg += 1;
+        }
+    }
 
-	double step = 10 / size;
+    // вывод значений переменных
+    std::cout << "EPS: "           << eps      << std::endl;
+    std::cout << "Max iteration: " << iter_max << std::endl;
+    std::cout << "Size: "          << size     << std::endl;
+    std::cout << std::endl;
+    
+    // выделение памяти для массивов
+    double* A    = new double[size * size];
+	double* Anew = new double[size * size];
+	
+    memset(A, 0, size * size * sizeof(double));
 
-	int S = size - 1;
+    // инициализация A
+    for(int i = 0; i < size; i += 1) 
+    {
+        at(A, 0, i)      = 10.0 / (size - 1) * i + 10;
+        at(A, i, 0)      = 10.0 / (size - 1) * i + 10;
+        at(A, size-1, i) = 10.0 / (size - 1) * i + 20;
+        at(A, i, size-1) = 10.0 / (size - 1) * i + 20;
+     }
+   
+    double error  = 1.0;
+    int iteration = 0;
 
-	for (int i = 1; i < size - 1; i += 1)
-	{
-		A[i][S] = A[i - 1][S] + step;
-		A[i][0] = A[i - 1][0] + step;
-		A[0][i] = A[0][i - 1] + step;
-		A[S][i] = A[S][i - 1] + step;
-	}
+    // копирование массивов на видеокарту
+    #pragma acc data copyin(A[:size * size]) create(Anew[:size * size])
+    {
+        #pragma acc parallel loop 
+        // заполнение граней массива Anew начальными значениями
+        for(int j = 0; j < size; j += 1) 
+        {
+            at(Anew, j, 0)      = at(A, j, 0);
+            at(Anew, 0, j)      = at(A, 0, j);
+            at(Anew, j, size-1) = at(A, j, size-1);
+            at(Anew, size-1, j) = at(A, size-1, j);
+        }
+
+        while ( (error > eps) && (iteration < iter_max) )
+        {
+            // вычисление матрицы Anew
+            #pragma acc parallel loop
+            for( int i = 1; i < size-1; i += 1) 
+            {
+                #pragma acc loop
+                    for(int j = 1; j < size - 1; j += 1) 
+                        at(Anew, i, j) = 0.25 * ( at(A, i, j+1) + at(A, i, j-1) + at(A, i-1, j) + at(A, i+1, j) );
+            }
+
+            // вычисление матрицы A        
+            #pragma acc parallel loop
+            for(int i = 1; i < size-1; i += 1)
+            {
+            #pragma acc loop
+                for(int j = 1; j < size - 1; j += 1) 
+                    at(A, i, j) = 0.25 * ( at(Anew, i, j+1) + at(Anew, i, j-1) + at(Anew, i-1, j) + at(Anew, i+1, j) );
+            }
+
+            iteration += 2;
+
+            if (iteration % 100 == 0)
+            {
+                error = 0.0;
+                // возвращаем ошибку на host
+                #pragma acc parallel loop reduction(max:error)
+                for(int i = 1; i < size - 1; i += 1)
+                {
+                    #pragma acc loop reduction(max:error)
+                        for(int j = 1; j < size - 1; j += 1)
+                            error = fmax(error, fabs(at(A, i, j) - at(Anew, i, j)));
+                }
+            }
+        }
+
+        if(mat)
+        {
+            #pragma acc update host(A[:size * size]) 
+            for(int i = 0; i < size; i += 1)
+            {
+                for(int j = 0; j < size; j += 1) 
+                    std::cout << at(A, i, j) << ' ';
+                std::cout << std::endl;
+            }
+        }
+    }
+
+    // вывод результатов
+    std::cout << "Result: "                  << std::endl;
+    std::cout << "Iterations: " << iteration << std::endl;
+    std::cout << "Error: "      << error     << std::endl;
+    std::cout << std::endl;
+
+    // удаление памяти массивов
+    delete[] A;
+    delete[] Anew;
+
+    // возвращаем результат работы main(), default return 0
+    return 0;
 }
-
-
-int main(int argc, char* argv[])
-{
-	for (int arg = 0; arg < argc; arg += 1)
-	{
-		std::stringstream stream;
-		if (strcmp(argv[arg], "-error") == 0)
-		{
-			stream << argv[arg + 1];
-			stream >> eps;
-		}
-		else if (strcmp(argv[arg], "-iter") == 0)
-		{
-			stream << argv[arg + 1];
-			stream >> iter_max;
-		}
-		else if (strcmp(argv[arg], "-size") == 0)
-		{
-			stream << argv[arg + 1];
-			stream >> size;
-		}
-	}
-
-	int S = size - 1;
-
-	std::cout << "Settings:" << std::endl;
-	std::cout << "\tEPS: " << eps << std::endl;
-	std::cout << "\tTotal iteration: " << iter_max << std::endl;
-	std::cout << "\tSize: " << size << std::endl;
-
-	double** A = new double* [size];
-	for (int i = 0; i < size; i += 1)
-		A[i] = new double[size];
-
-	double** Anew = new double* [size];
-	for (int i = 0; i < size; i += 1)
-		Anew[i] = new double[size];
-
-	initArr(A);
-
-	double error = 1.0;
-	int iteration = 0;
-
-#pragma acc data copy(A[:size][:size]) create(Anew[:size][:size])
-	while ((error > eps) && (iteration < iter_max))
-	{
-		error = 0.0;
-
-#pragma acc parallel loop reduction(max:error)
-		for (int i = 1; i < S; i += 1)
-		{
-#pragma acc loop reduction(max:error)
-			for (int j = 1; j < S; j += 1)
-			{
-				Anew[i][j] = 0.25 * (A[i][j + 1] + A[i][j - 1] + A[i + 1][j] + A[i - 1][j]);
-				error = fmax(error, fabs(Anew[i][j] - A[i][j]));
-			}
-		}
-#pragma acc parallel loop collapse (2)
-		for (int i = 1; i < S; i += 1)
-		{
-			for (int j = 1; j < S; j += 1)
-				A[i][j] = Anew[i][j];
-		}
-
-		iteration += 1;
-	}
-
-	std::cout << "Result: " << std::endl;
-	std::cout << "\tIterations: " << iteration << std::endl;
-	std::cout << "\tError: " << error << std::endl;
-
-#pragma acc loop
-	for (size_t i = 0; i < size; i += 1)
-	{
-		delete[] A[i];
-		delete[] Anew[i];
-	}
-	delete[] A;
-	delete[] Anew;
-
-	return 0;
-}
-
