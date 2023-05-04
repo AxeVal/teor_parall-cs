@@ -50,7 +50,7 @@ __global__ void sub(double *A, double *B, int size)
 // шаг заполнения матрицы A начальными значениями
 __global__ void init(double *A, int size)
 {
-	size_t i = threadIdx.x;
+	size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     int step = 10.0 / (size-1) * i;
 
     at(A, 0, i)      = 10.0 + step;
@@ -138,9 +138,12 @@ int main(int argc, char **argv)
     cudaMalloc(&A_new_device, sizeof(double) * total_size);
     cudaMalloc(&cudaError,    sizeof(double) * 1);
 
+    dim3 thread = size < 1024 ? size : 1024;
+    dim3 block = size / (size < 1024 ? size : 1024);
+
     // заполнение матриц начальными значениями (значения границ)
-    init<<<1, size>>>(A_device, size);
-    init<<<1, size>>>(A_new_device, size);
+    init<<<block, thread>>>(A_device, size);
+    init<<<block, thread>>>(A_new_device, size);
     // cudaMemcpy(A_new_device, A_device, sizeof(double) * total_size, cudaMemcpyDeviceToDevice);
 
     // вычисление tmp_size (размера temp_storage)
@@ -165,7 +168,7 @@ int main(int argc, char **argv)
     cub::DeviceReduce::Max(temp_storage, temp_size, A_new_device, cudaError, total_size, stream);
 
     // заполнения границ матрицы A_new_device начальными значениями
-    init<<<1, size, 0, stream>>>(A_new_device, size);
+    init<<<block, thread, 0, stream>>>(A_new_device, size);
     
     cudaStreamEndCapture(stream, &graph);
 
@@ -197,7 +200,7 @@ int main(int argc, char **argv)
     if(mat)
     {
         double* A = new double[total_size];
-        cudaMemcpyAsync(A, A_device, sizeof(double), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(&A, A_device, sizeof(double), cudaMemcpyDeviceToHost, stream);
         for(int i = 0; i < size; i += 1)
         {
             for(int j = 0; j < size; j += 1)
